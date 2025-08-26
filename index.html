@@ -185,6 +185,23 @@
             </div>
           </div>
 
+          <div class="mt-4 border-t border-border-color pt-4">
+            <h3 class="panel-title text-base mb-3">Interpretation Settings</h3>
+            <div class="space-y-3 text-sm">
+              <div class="flex items-center justify-between gap-3">
+                <label for="provider-select" class="metric-label flex-shrink-0">Provider</label>
+                <select id="provider-select" class="w-full bg-bg-primary border border-border-color rounded-md px-2 py-1">
+                  <!-- Options will be populated by app.js -->
+                </select>
+              </div>
+              <div class="flex items-center justify-between gap-3">
+                <label for="api-key-input" class="metric-label flex-shrink-0">API Key</label>
+                <input type="password" id="api-key-input" class="w-full bg-bg-primary border border-border-color rounded-md px-2 py-1" placeholder="Enter your API key">
+                <button id="save-key-btn" class="btn bg-blue-600 hover:bg-blue-500 text-xs px-3 py-1">Save</button>
+              </div>
+            </div>
+          </div>
+
           <div class="mt-4 border-t border-border-color pt-4 text-sm">
              <div class="flex items-center justify-center gap-3">
                <label for="gemini-toggle" class="metric-label">Use Online Interpretation</label>
@@ -231,6 +248,7 @@
     </main>
   </div>
 
+  <script src="js/providers.js"></script>
   <script src="app.js"></script>
 <script>window.parent.postMessage({ action: "ready" }, "*"); 
  
