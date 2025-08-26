@@ -1,421 +1,670 @@
-/* OCT Standalone App: Simulation + UI + PWA register */
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const q = (s) => document.querySelector(s);
-
+// --- UTILITY FUNCTIONS ---
 const Utils = {
   stdDev: (arr) => {
-    const n = arr.length; if (!n) return 0;
-    const mean = arr.reduce((a,b)=>a+b,0)/n;
-    return Math.sqrt(arr.reduce((a,x)=>a+(x-mean)*(x-mean),0)/n);
+    const n = arr.length;
+    if (n === 0) return 0;
+    const mean = arr.reduce((a, b) => a + b, 0) / n;
+    const variance = arr.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / n;
+    return Math.sqrt(variance);
   },
-  mapRange:(v,inMin,inMax,outMin,outMax)=> (v-inMin)*(outMax-outMin)/(inMax-inMin)+outMin,
-  lerp:(a,b,t)=> a+(b-a)*t,
-  viridis:(v)=>{
-    const c=[[68,1,84],[72,40,120],[62,74,137],[49,104,142],[38,130,142],[31,158,137],[53,183,121],[109,205,89],[180,222,44],[253,231,37]];
-    v=clamp(v,0,.9999); const i=Math.min(c.length-1,Math.floor(v*c.length)); const k=c[i];
-    return `rgb(${k[0]},${k[1]},${k[2]})`;
+  mapRange: (value, inMin, inMax, outMin, outMax) => {
+    return (value - inMin) * (outMax - outMin) / (inMax - inMin) + outMin;
   },
-  magma:(v)=>{
-    const c=[[0,0,4],[28,15,68],[79,18,123],[132,31,120],[181,50,99],[223,80,72],[251,126,43],[253,185,99],[252,247,229]];
-    v=clamp(v,0,.9999); const i=Math.min(c.length-1,Math.floor(v*c.length)); const k=c[i];
-    return `rgb(${k[0]},${k[1]},${k[2]})`;
+  lerp: (a, b, t) => a + (b - a) * t,
+  viridisColor: (value) => {
+    const colors = [
+      [68, 1, 84], [72, 40, 120], [62, 74, 137], [49, 104, 142], [38, 130, 142],
+      [31, 158, 137], [53, 183, 121], [109, 205, 89], [180, 222, 44], [253, 231, 37]
+    ];
+    const v = Math.min(0.9999, Math.max(0, value));
+    const i = Math.min(colors.length - 1, Math.floor(v * colors.length));
+    const c = colors[i];
+    return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
   },
-  noise:(s)=>{const x=Math.sin(s)*1e4; return x-Math.floor(x);},
-  download:(filename, text)=>{const a=document.createElement('a');a.href='data:application/json;charset=utf-8,'+encodeURIComponent(text);a.download=filename;document.body.appendChild(a);a.click();a.remove();},
+  magmaColor: (value) => {
+    const colors = [
+      [0, 0, 4], [28, 15, 68], [79, 18, 123], [132, 31, 120], [181, 50, 99],
+      [223, 80, 72], [251, 126, 43], [253, 185, 99], [252, 247, 229]
+    ];
+    const v = Math.min(0.9999, Math.max(0, value));
+    const i = Math.min(colors.length - 1, Math.floor(v * colors.length));
+    const c = colors[i];
+    return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+  },
+  // Simple noise function for more organic movement
+  noise: (seed) => {
+    const x = Math.sin(seed) * 10000;
+    return x - Math.floor(x);
+  }
 };
 
+// --- GLOBAL CONFIG ---
+const simulationParams = {
+  ai: {
+    numRois: 35,
+    matrixSize: 24,
+    nlca_volatility: 0.02
+  },
+  bio: { // Bio params are not user-configurable yet
+    numRois: 25,
+    matrixSize: 16,
+    nlca_volatility: 0.005
+  }
+};
+
+// --- SIMULATION CORE ---
 class SystemState {
-  constructor(id, numRois=35, matrixSize=24, cfg={}) {
-    this.id=id; this.numRois=numRois; this.matrixSize=matrixSize; this.time=0; this.metrics={};
-    this.cfg = Object.assign({
-      nlcaVolatility: id==='ai'?0.02:0.005,
-      activationDecay: id==='ai'?0.95:0.99,
-      weightDecay: id==='ai'?0.98:0.995,
-    }, cfg || {});
+  constructor(id) {
+    this.id = id;
+    this.time = 0;
+    this.metrics = {};
+    // Parameters will be read from simulationParams in reset()
     this.reset();
   }
+
   reset() {
-    this.dFNC_graph = this.initDFNC(this.numRois);
-    this.nlca_matrix = Array(this.matrixSize).fill(0).map(()=>Array(this.matrixSize).fill(0).map(()=>Math.random()));
-    this.dPCI_history=[]; this.phi_history=[]; this.phi_estimate=0;
+    // Read parameters from the global config
+    this.numRois = simulationParams[this.id].numRois;
+    this.matrixSize = simulationParams[this.id].matrixSize;
+
+    this.dFNC_graph = this.initialize_dFNC_graph(this.numRois);
+    this.nlca_matrix = Array(this.matrixSize)
+      .fill(0).map(() => Array(this.matrixSize).fill(0).map(() => Math.random()));
+    this.dPCI_history = [];
+    this.phi_history = [];
+    this.phi_estimate = 0.0;
   }
-  initDFNC(numNodes){
-    const graph={nodes:[],edges:[],width:0,height:0};
-    const canvas=document.getElementById(`${this.id}-dFNC-canvas`);
-    const w=(canvas?.parentElement?.clientWidth||600), h=(canvas?.parentElement?.clientHeight||400);
-    graph.width=w; graph.height=h;
-    for(let i=0;i<numNodes;i++){
-      graph.nodes.push({id:i,x:Math.random()*w,y:Math.random()*h,vx:0,vy:0,activation:Math.random()*0.1});
+
+  initialize_dFNC_graph(numNodes) {
+    const graph = { nodes: [], edges: [], width: 0, height: 0 };
+    const canvas = document.getElementById(`${this.id}-dFNC-canvas`);
+    const width = (canvas?.parentElement?.clientWidth || 600);
+    const height = (canvas?.parentElement?.clientHeight || 400);
+    graph.width = width;
+    graph.height = height;
+
+    for (let i = 0; i < numNodes; i++) {
+      graph.nodes.push({
+        id: i,
+        x: Math.random() * width,
+        y: Math.random() * height,
+        vx: 0, vy: 0,
+        activation: Math.random() * 0.1
+      });
     }
-    for(let i=0;i<numNodes;i++)for(let j=i+1;j<numNodes;j++) if(Math.random()<0.15) graph.edges.push({source:i,target:j,weight:Math.random()});
+    for (let i = 0; i < numNodes; i++) {
+      for (let j = i + 1; j < numNodes; j++) {
+        if (Math.random() < 0.15) {
+          graph.edges.push({ source: i, target: j, weight: Math.random() });
+        }
+      }
+    }
     return graph;
   }
-  update(){
-    this.time++;
-    const {nlcaVolatility,activationDecay,weightDecay}=this.cfg;
 
-    // NLCA random walk
-    for(let i=0;i<this.matrixSize;i++){
-      for(let j=0;j<this.matrixSize;j++){
-        this.nlca_matrix[i][j]+= (Math.random()-0.5)*nlcaVolatility;
-        this.nlca_matrix[i][j]=clamp(this.nlca_matrix[i][j],0,1);
+  update_state() {
+    this.time++;
+    const isAI = this.id === 'ai';
+        const nlca_volatility = simulationParams[this.id].nlca_volatility;
+    const activation_decay = isAI ? 0.95 : 0.99;
+    const weight_decay = isAI ? 0.98 : 0.995;
+
+    for (let i = 0; i < this.matrixSize; i++) {
+      for (let j = 0; j < this.matrixSize; j++) {
+        this.nlca_matrix[i][j] += (Math.random() - 0.5) * nlca_volatility;
+        this.nlca_matrix[i][j] = Math.max(0, Math.min(1, this.nlca_matrix[i][j]));
       }
     }
 
-    // Node dynamics
-    this.dFNC_graph.nodes.forEach(node=>{
-      node.activation *= (activationDecay + Math.random()*(1.0-activationDecay)*2);
-      node.activation = clamp(node.activation,0,1);
-      const speed = this.id==='ai' ? 0.1:0.02;
-      node.vx += (Utils.noise(this.time*0.01+node.id)-0.5)*speed;
-      node.vy += (Utils.noise(this.time*0.01+node.id+100)-0.5)*speed;
-      node.vx *= 0.95; node.vy *= 0.95; node.x += node.vx; node.y += node.vy;
-      const canvas=document.getElementById(`${this.id}-dFNC-canvas`);
-      const w=canvas?.parentElement?.clientWidth||this.dFNC_graph.width||600;
-      const h=canvas?.parentElement?.clientHeight||this.dFNC_graph.height||400;
-      if(node.x<0||node.x>w) node.vx*=-1; if(node.y<0||node.y>h) node.vy*=-1;
-      node.x=clamp(node.x,0,w); node.y=clamp(node.y,0,h);
+    this.dFNC_graph.nodes.forEach(node => {
+      node.activation *= (activation_decay + Math.random() * (1.0 - activation_decay) * 2);
+      node.activation = Math.max(0, Math.min(1, node.activation));
+
+      // Organic movement
+      const speed = isAI ? 0.1 : 0.02;
+      node.vx += (Utils.noise(this.time * 0.01 + node.id) - 0.5) * speed;
+      node.vy += (Utils.noise(this.time * 0.01 + node.id + 100) - 0.5) * speed;
+      node.vx *= 0.95;
+      node.vy *= 0.95;
+      node.x += node.vx;
+      node.y += node.vy;
+
+      // Boundary check
+      const canvas = document.getElementById(`${this.id}-dFNC-canvas`);
+      const w = canvas?.parentElement?.clientWidth || this.dFNC_graph.width || 600;
+      const h = canvas?.parentElement?.clientHeight || this.dFNC_graph.height || 400;
+      if (node.x < 0 || node.x > w) node.vx *= -1;
+      if (node.y < 0 || node.y > h) node.vy *= -1;
+      node.x = Math.max(0, Math.min(w, node.x));
+      node.y = Math.max(0, Math.min(h, node.y));
     });
 
-    // Edge weights
-    this.dFNC_graph.edges.forEach(e=>{
-      e.weight *= (weightDecay + Math.random()*(1.0-weightDecay)*2);
-      e.weight = clamp(e.weight,0.01,1);
+    this.dFNC_graph.edges.forEach(edge => {
+      edge.weight *= (weight_decay + Math.random() * (1.0 - weight_decay) * 2);
+      edge.weight = Math.max(0.01, Math.min(1, edge.weight));
     });
   }
 }
 
-const Measurement = {
-  nlca:(state)=> Utils.stdDev(state.nlca_matrix.flat()),
-  dfnc:(state)=>{
-    const n=state.dFNC_graph.nodes.length;
-    const avg_activation = n? state.dFNC_graph.nodes.reduce((s,n)=>s+n.activation,0)/n : 0;
-    const m=state.dFNC_graph.edges.length;
-    const avg_weight = m? state.dFNC_graph.edges.reduce((s,e)=>s+e.weight,0)/m : 0;
-    return {avg_activation, avg_weight};
+const MeasurementEngine = {
+  calculate_nlca_score(state) {
+    return Utils.stdDev(state.nlca_matrix.flat());
   },
-  dpci:(state,z=0.8)=>{
-    const nodes=state.dFNC_graph.nodes; if(!nodes.length) return 0;
-    const temp=JSON.parse(JSON.stringify(nodes));
-    const idx=Math.floor(Math.random()*temp.length); temp[idx].activation=Math.min(1,temp[idx].activation+z);
-    let resp=[]; let cur=temp.map(n=>n.activation);
-    for(let step=0; step<15; step++){
-      resp.push(Utils.stdDev(cur));
-      let nxt=[...cur];
-      state.dFNC_graph.edges.forEach(e=>{ const inf=cur[e.source]*e.weight*0.05; nxt[e.target]+=inf; });
-      nxt=nxt.map(a=>clamp(a*0.9,0,1));
-      cur=nxt;
+  calculate_dFNC_metrics(state) {
+    if (state.dFNC_graph.nodes.length === 0) return { avg_activation: 0, avg_weight: 0 };
+    const avg_activation = state.dFNC_graph.nodes.reduce((sum, node) => sum + node.activation, 0) / state.dFNC_graph.nodes.length;
+    const avg_weight = state.dFNC_graph.edges.length > 0
+      ? state.dFNC_graph.edges.reduce((sum, edge) => sum + edge.weight, 0) / state.dFNC_graph.edges.length
+      : 0;
+    return { avg_activation, avg_weight };
+  },
+  calculate_dPCI_score(state, zap_strength = 0.8) {
+    if (state.dFNC_graph.nodes.length === 0) return 0;
+    const tempNodes = JSON.parse(JSON.stringify(state.dFNC_graph.nodes));
+    const zapNodeIndex = Math.floor(Math.random() * tempNodes.length);
+    tempNodes[zapNodeIndex].activation = Math.min(1, tempNodes[zapNodeIndex].activation + zap_strength);
+    let response_cascade = [];
+    let current_activations = tempNodes.map(n => n.activation);
+    for (let step = 0; step < 15; step++) {
+      response_cascade.push(Utils.stdDev(current_activations));
+      let next_activations = [...current_activations];
+      state.dFNC_graph.edges.forEach(edge => {
+        const influence = current_activations[edge.source] * edge.weight * 0.05;
+        next_activations[edge.target] += influence;
+      });
+      next_activations = next_activations.map(act => Math.max(0, Math.min(1, act * 0.9)));
+      current_activations = next_activations;
     }
-    return (resp.reduce((a,b)=>a+b,0)/resp.length)*2;
+    const dPCI = response_cascade.reduce((a, b) => a + b, 0) / response_cascade.length;
+    return dPCI * 2;
   },
-  phi:(metrics)=>{
-    const w_nlca=0.2, w_dfnc=0.3, w_dpci=0.5;
-    const dfnc_comp=(metrics.dFNC.avg_activation+metrics.dFNC.avg_weight)/2;
-    return clamp( w_nlca*metrics.NLCA + w_dfnc*dfnc_comp + w_dpci*metrics.dPCI, 0, 1 );
+  estimate_phi(metrics) {
+    const w_nlca = 0.2, w_dfnc = 0.3, w_dpci = 0.5;
+    const dfnc_component = (metrics.dFNC_metrics.avg_activation + metrics.dFNC_metrics.avg_weight) / 2.0;
+    const phi = (w_nlca * metrics.nlca_score) + (w_dfnc * dfnc_component) + (w_dpci * metrics.dPCI_score);
+    return Math.max(0, Math.min(1, phi));
   }
 };
 
-class Perturbation {
-  constructor(state){ this.state=state; }
-  adversarial(){ for(let i=0;i<this.state.matrixSize;i++)for(let j=0;j<this.state.matrixSize;j++){ this.state.nlca_matrix[i][j]+= (Math.random()-0.5)*0.8; this.state.nlca_matrix[i][j]=clamp(this.state.nlca_matrix[i][j],0,1); } }
-  poison(){ const e=this.state.dFNC_graph.edges; if(!e.length) return; for(let i=0;i<Math.min(10,e.length);i++){ const k=e[Math.floor(Math.random()*e.length)]; k.weight*=0.1; } }
-  bombard(){ const n=this.state.dFNC_graph.nodes; if(!n.length) return; for(let i=0;i<Math.min(5,n.length);i++){ const t=n[Math.floor(Math.random()*n.length)]; t.activation=1; } }
-  reset(){ this.state.reset(); }
+class PerturbationController {
+  constructor(state) { this.state = state; }
+  adversarial_attack() {
+    for (let i = 0; i < this.state.matrixSize; i++) {
+      for (let j = 0; j < this.state.matrixSize; j++) {
+        this.state.nlca_matrix[i][j] += (Math.random() - 0.5) * 0.8;
+        this.state.nlca_matrix[i][j] = Math.max(0, Math.min(1, this.state.nlca_matrix[i][j]));
+      }
+    }
+  }
+  data_poisoning() {
+    if (this.state.dFNC_graph.edges.length === 0) return;
+    for (let i = 0; i < 10; i++) {
+      const edge = this.state.dFNC_graph.edges[Math.floor(Math.random() * this.state.dFNC_graph.edges.length)];
+      edge.weight *= 0.1;
+    }
+  }
+  sensory_bombardment() {
+    if (this.state.dFNC_graph.nodes.length === 0) return;
+    for (let i = 0; i < 5; i++) {
+      const targetNode = this.state.dFNC_graph.nodes[Math.floor(Math.random() * this.state.dFNC_graph.nodes.length)];
+      targetNode.activation = 1.0;
+    }
+  }
+  reset_system() {
+    this.state.reset();
+  }
 }
 
-class Visualizer {
-  constructor(ai,bio){
-    this.ai=ai; this.bio=bio;
-    this.can = {
-      ai_dFNC: q('#ai-dFNC-canvas'), ai_NLCA: q('#ai-NLCA-canvas'), ai_dPCI:q('#ai-dPCI-canvas'),
-      bio_dFNC:q('#bio-dFNC-canvas'), bio_micro:q('#bio-microstates-canvas'), bio_dPCI:q('#bio-dPCI-canvas'),
-      phi:q('#phi-canvas')
+// --- VISUALIZATION LAYER ---
+class SimulatorVisualizer {
+  constructor(aiState, bioState) {
+    this.aiState = aiState;
+    this.bioState = bioState;
+    this.canvases = {
+      ai_dFNC: document.getElementById('ai-dFNC-canvas'),
+      ai_NLCA: document.getElementById('ai-NLCA-canvas'),
+      ai_dPCI: document.getElementById('ai-dPCI-canvas'),
+      bio_dFNC: document.getElementById('bio-dFNC-canvas'),
+      bio_microstates: document.getElementById('bio-microstates-canvas'),
+      bio_dPCI: document.getElementById('bio-dPCI-canvas'),
+      phi: document.getElementById('phi-canvas'),
     };
-    this.ctx = {
-      ai_dFNC: this.can.ai_dFNC.getContext('2d'),
-      ai_NLCA: this.can.ai_NLCA.getContext('2d'),
-      ai_dPCI: this.can.ai_dPCI.getContext('2d'),
-      bio_dFNC: this.can.bio_dFNC.getContext('2d'),
-      bio_micro: this.can.bio_micro.getContext('2d'),
-      bio_dPCI: this.can.bio_dPCI.getContext('2d'),
-      phi: this.can.phi.getContext('2d'),
-    };
-    this.ro=new ResizeObserver(()=> requestAnimationFrame(()=>this.resize()));
-    Object.values(this.can).forEach(c=>{ if(c.parentElement) this.ro.observe(c.parentElement); });
-    this.resize();
+    this.contexts = {};
+    this.microstateTemplates = this.generateMicrostateTemplates();
+    this.resizeObserver = new ResizeObserver(() => {
+      window.requestAnimationFrame(() => this.resizeCanvases());
+    });
+    this.init();
   }
-  resize(){
-    const dpr=window.devicePixelRatio||1;
-    for(const c of Object.values(this.can)){
-      const p=c.parentElement||c, r=p.getBoundingClientRect();
-      c.width=Math.max(1,Math.floor(r.width*dpr)); c.height=Math.max(1,Math.floor(r.height*dpr));
-      const ctx=c.getContext('2d'); ctx.setTransform(1,0,0,1,0,0); ctx.scale(dpr,dpr);
+
+  init() {
+    for (const key in this.canvases) {
+      this.contexts[key] = this.canvases[key].getContext('2d');
+      if (this.canvases[key].parentElement) {
+        this.resizeObserver.observe(this.canvases[key].parentElement);
+      }
     }
-    [this.ai,this.bio].forEach(s=>{
-      const c=document.getElementById(`${s.id}-dFNC-canvas`); if(!c) return;
-      const nw=c.parentElement.clientWidth, nh=c.parentElement.clientHeight;
-      const ow=s.dFNC_graph.width||nw, oh=s.dFNC_graph.height||nh;
-      if(ow>0&&oh>0) s.dFNC_graph.nodes.forEach(n=>{ n.x=(n.x/ow)*nw; n.y=(n.y/oh)*nh; });
-      s.dFNC_graph.width=nw; s.dFNC_graph.height=nh;
-    });
+    this.resizeCanvases();
   }
-  drawDFNC(state,ctx){
-    const w=ctx.canvas.parentElement.clientWidth, h=ctx.canvas.parentElement.clientHeight;
-    ctx.clearRect(0,0,w,h);
-    state.dFNC_graph.edges.forEach(e=>{
-      const a=state.dFNC_graph.nodes[e.source], b=state.dFNC_graph.nodes[e.target];
-      const o=Utils.mapRange(e.weight,0,1,0.1,0.7); ctx.strokeStyle=`rgba(139,148,158,${o})`; ctx.lineWidth=e.weight*2.5;
-      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
-    });
-    state.dFNC_graph.nodes.forEach(n=>{
-      const color= state.id==='ai'? Utils.viridis(n.activation) : Utils.magma(n.activation);
-      ctx.fillStyle=color; ctx.beginPath(); ctx.arc(n.x,n.y,5+n.activation*5,0,Math.PI*2); ctx.fill();
-    });
-  }
-  drawNLCA(state,ctx){
-    const w=ctx.canvas.parentElement.clientWidth, m=state.matrixSize, cell=w/m;
-    for(let i=0;i<m;i++) for(let j=0;j<m;j++){ ctx.fillStyle=Utils.viridis(state.nlca_matrix[i][j]); ctx.fillRect(j*cell,i*cell,cell,cell); }
-  }
-  microTemplates(){ return [
-    (x,y)=>Math.sin(x*2)*Math.cos(y*0.5),
-    (x,y)=>Math.sin(x*-2)*Math.cos(y*0.5),
-    (x,y)=>Math.cos(x*2+y*2),
-    (x,y)=>Math.sin(x*4),
-  ]; }
-  drawMicro(state,ctx){
-    const w=ctx.canvas.parentElement.clientWidth, h=ctx.canvas.parentElement.clientHeight;
-    ctx.clearRect(0,0,w,h);
-    const cx=w/2, cy=h/2, r=Math.min(w,h)*0.45; const tpl=this.microTemplates()[Math.floor((state.phi_estimate||0)*3.96)] || (x=>x);
-    const res=20, cellW=w/res, cellH=h/res;
-    for(let i=0;i<res;i++)for(let j=0;j<res;j++){
-      const x=i*cellW, y=j*cellH, dist=Math.hypot(x-cx,y-cy); if(dist>r) continue;
-      const nx=(x-cx)/r, ny=(y-cy)/r, val=tpl(nx,ny), t=(val+1)/2;
-      const R=Utils.lerp(50,255,t), B=Utils.lerp(255,50,t);
-      ctx.fillStyle=`rgb(${R|0},80,${B|0})`; ctx.fillRect(x,y,cellW,cellH);
+
+  resizeCanvases() {
+    const dpr = window.devicePixelRatio || 1;
+    for (const key in this.canvases) {
+      const canvas = this.canvases[key];
+      const parent = canvas.parentElement || canvas;
+      const rect = parent.getBoundingClientRect();
+      // reset size (resets transform)
+      canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+      canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+      const ctx = this.contexts[key];
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
     }
-    ctx.strokeStyle='#8B949E'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke();
+    [this.aiState, this.bioState].forEach(state => {
+      const canvas = document.getElementById(`${state.id}-dFNC-canvas`);
+      if (!canvas) return;
+      const newWidth = canvas.parentElement.clientWidth;
+      const newHeight = canvas.parentElement.clientHeight;
+      const oldWidth = state.dFNC_graph.width || newWidth;
+      const oldHeight = state.dFNC_graph.height || newHeight;
+      if (oldWidth > 0 && oldHeight > 0) {
+        state.dFNC_graph.nodes.forEach(node => {
+          node.x = (node.x / oldWidth) * newWidth;
+          node.y = (node.y / oldHeight) * newHeight;
+        });
+      }
+      state.dFNC_graph.width = newWidth;
+      state.dFNC_graph.height = newHeight;
+    });
   }
-  plot(ctx, hist, color, minY, maxY){
-    const w=ctx.canvas.parentElement.clientWidth, h=ctx.canvas.parentElement.clientHeight;
-    ctx.clearRect(0,0,w,h); ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath();
-    hist.forEach((v,i)=>{ const x=Utils.mapRange(i,0,Math.max(1,hist.length-1),0,w); const y=Utils.mapRange(v,minY,maxY,h,0); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+
+  draw_dFNC(state, ctx) {
+    const width = ctx.canvas.parentElement.clientWidth;
+    const height = ctx.canvas.parentElement.clientHeight;
+    ctx.clearRect(0, 0, width, height);
+
+    state.dFNC_graph.edges.forEach(edge => {
+      const source = state.dFNC_graph.nodes[edge.source];
+      const target = state.dFNC_graph.nodes[edge.target];
+      const opacity = Utils.mapRange(edge.weight, 0, 1, 0.1, 0.7);
+      ctx.strokeStyle = `rgba(139, 148, 158, ${opacity})`;
+      ctx.lineWidth = edge.weight * 2.5;
+      ctx.beginPath();
+      ctx.moveTo(source.x, source.y);
+      ctx.lineTo(target.x, target.y);
+      ctx.stroke();
+    });
+
+    state.dFNC_graph.nodes.forEach(node => {
+      const color = state.id === 'ai' ? Utils.viridisColor(node.activation) : Utils.magmaColor(node.activation);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, 5 + node.activation * 5, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+  }
+
+  draw_NLCA(state, ctx) {
+    const width = ctx.canvas.parentElement.clientWidth;
+    const matrixSize = state.matrixSize;
+    const cellSize = width / matrixSize;
+    for (let i = 0; i < matrixSize; i++) {
+      for (let j = 0; j < matrixSize; j++) {
+        ctx.fillStyle = Utils.viridisColor(state.nlca_matrix[i][j]);
+        ctx.fillRect(j * cellSize, i * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+
+  generateMicrostateTemplates() {
+    // Simplified templates for 4 common EEG microstates
+    return [
+      (x, y) => Math.sin(x * 2) * Math.cos(y * 0.5),      // A
+      (x, y) => Math.sin(x * -2) * Math.cos(y * 0.5),     // B
+      (x, y) => Math.cos(x * 2 + y * 2),                  // C
+      (x, y) => Math.sin(x * 4),                          // D
+    ];
+  }
+
+  draw_microstates(state, ctx) {
+    const width = ctx.canvas.parentElement.clientWidth;
+    const height = ctx.canvas.parentElement.clientHeight;
+    ctx.clearRect(0, 0, width, height);
+
+    // Head outline
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.min(width, height) * 0.45;
+    ctx.strokeStyle = 'var(--text-secondary)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Determine microstate based on phi
+    const stateIdx = Math.floor(state.phi_estimate * this.microstateTemplates.length * 0.99);
+    const template = this.microstateTemplates[stateIdx];
+    const resolution = 20;
+    const cellW = width / resolution;
+    const cellH = height / resolution;
+
+    for (let i = 0; i < resolution; i++) {
+      for (let j = 0; j < resolution; j++) {
+        const x = i * cellW;
+        const y = j * cellH;
+        const dist = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+        if (dist > radius) continue;
+
+        const normX = (x - centerX) / radius;
+        const normY = (y - centerY) / radius;
+        const value = template(normX, normY); // (-1..1)
+        const normValue = (value + 1) / 2;   // (0..1)
+
+        const r = Utils.lerp(50, 255, normValue);
+        const b = Utils.lerp(255, 50, normValue);
+        ctx.fillStyle = `rgb(${r.toFixed(0)}, 80, ${b.toFixed(0)})`;
+        ctx.fillRect(x, y, cellW, cellH);
+      }
+    }
+  }
+
+  draw_history_plot(ctx, history, color, minY, maxY) {
+    const width = ctx.canvas.parentElement.clientWidth;
+    const height = ctx.canvas.parentElement.clientHeight;
+    ctx.clearRect(0, 0, width, height);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    history.forEach((value, i) => {
+      const x = Utils.mapRange(i, 0, Math.max(1, history.length - 1), 0, width);
+      const y = Utils.mapRange(value, minY, maxY, height, 0);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
     ctx.stroke();
   }
-  drawPhi(ctx, ai, bio){
-    const w=ctx.canvas.parentElement.clientWidth, h=ctx.canvas.parentElement.clientHeight;
-    ctx.clearRect(0,0,w,h);
-    const nodes={
-      AI_dFNC:{x:w*.1,y:h*.2,value:ai.metrics.dFNC?.avg_activation??0},
-      AI_NLCA:{x:w*.1,y:h*.5,value:ai.metrics?.NLCA??0},
-      AI_dPCI:{x:w*.1,y:h*.8,value:ai.metrics?.dPCI??0},
-      BIO_dFNC:{x:w*.9,y:h*.2,value:bio.metrics.dFNC?.avg_activation??0},
-      BIO_MS:{x:w*.9,y:h*.5,value:(bio.phi_estimate??0)*.8},
-      BIO_PCI:{x:w*.9,y:h*.8,value:bio.metrics?.dPCI??0},
-      AI_INT:{x:w*.3,y:h*.35,value:((ai.metrics?.NLCA??0)+(ai.metrics?.dFNC?.avg_weight??0))/2},
-      AI_CMP:{x:w*.3,y:h*.65,value:ai.metrics?.dPCI??0},
-      BIO_INT:{x:w*.7,y:h*.35,value:(((bio.phi_estimate??0)*.8)+(bio.metrics?.dFNC?.avg_weight??0))/2},
-      BIO_CMP:{x:w*.7,y:h*.65,value:bio.metrics?.dPCI??0},
-      PHI_AI:{x:w*.5,y:h*.3,value:ai.phi_estimate??0},
-      PHI_BIO:{x:w*.5,y:h*.7,value:bio.phi_estimate??0},
+
+  draw_phi_network(ctx) {
+    const width = ctx.canvas.parentElement.clientWidth;
+    const height = ctx.canvas.parentElement.clientHeight;
+    ctx.clearRect(0, 0, width, height);
+
+    const nodes = {
+      'AI_dFNC': { x: width * 0.1, y: height * 0.2, value: this.aiState.metrics.dFNC_metrics?.avg_activation ?? 0 },
+      'AI_NLCA': { x: width * 0.1, y: height * 0.5, value: this.aiState.metrics?.nlca_score ?? 0 },
+      'AI_dPCI': { x: width * 0.1, y: height * 0.8, value: this.aiState.metrics?.dPCI_score ?? 0 },
+      'BIO_dFNC': { x: width * 0.9, y: height * 0.2, value: this.bioState.metrics.dFNC_metrics?.avg_activation ?? 0 },
+      'BIO_MS': { x: width * 0.9, y: height * 0.5, value: (this.bioState.phi_estimate ?? 0) * 0.8 }, // proxy
+      'BIO_PCI': { x: width * 0.9, y: height * 0.8, value: this.bioState.metrics?.dPCI_score ?? 0 },
+      'AI_INT': { x: width * 0.3, y: height * 0.35, value: ((this.aiState.metrics?.nlca_score ?? 0) + (this.aiState.metrics?.dFNC_metrics?.avg_weight ?? 0)) / 2 },
+      'AI_CMP': { x: width * 0.3, y: height * 0.65, value: this.aiState.metrics?.dPCI_score ?? 0 },
+      'BIO_INT': { x: width * 0.7, y: height * 0.35, value: (((this.bioState.phi_estimate ?? 0) * 0.8) + (this.bioState.metrics?.dFNC_metrics?.avg_weight ?? 0)) / 2 },
+      'BIO_CMP': { x: width * 0.7, y: height * 0.65, value: this.bioState.metrics?.dPCI_score ?? 0 },
+      'PHI_AI': { x: width * 0.5, y: height * 0.3, value: this.aiState.phi_estimate ?? 0 },
+      'PHI_BIO': { x: width * 0.5, y: height * 0.7, value: this.bioState.phi_estimate ?? 0 },
     };
-    const edges=[['AI_dFNC','AI_INT'],['AI_NLCA','AI_INT'],['AI_dPCI','AI_CMP'],['BIO_dFNC','BIO_INT'],['BIO_MS','BIO_INT'],['BIO_PCI','BIO_CMP'],['AI_INT','PHI_AI'],['AI_CMP','PHI_AI'],['BIO_INT','PHI_BIO'],['BIO_CMP','PHI_BIO']];
-    ctx.lineWidth=1;
-    edges.forEach(([f,t])=>{const wgt=((nodes[f].value??0)+(nodes[t].value??0))/2; ctx.lineWidth=.5+wgt*3; ctx.strokeStyle=`rgba(139,148,158,${.2+wgt*.8})`; ctx.beginPath(); ctx.moveTo(nodes[f].x,nodes[f].y); ctx.lineTo(nodes[t].x,nodes[t].y); ctx.stroke();});
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    for(const k in nodes){ const n=nodes[k], out=k.startsWith('PHI'), bioNode=k.startsWith('BIO'), R=out?30:20;
-      ctx.fillStyle=bioNode?'rgba(63,185,80,.2)':'rgba(88,166,255,.2)'; ctx.strokeStyle=bioNode?'#3FB950':'#58A6FF'; ctx.lineWidth=2;
-      ctx.beginPath(); ctx.arc(n.x,n.y,R,0,Math.PI*2); ctx.fill(); ctx.stroke();
-      ctx.fillStyle='#fff'; if(out){ ctx.font='bold 16px Inter'; ctx.fillText(`Φ = ${(n.value??0).toFixed(3)}`,n.x,n.y+5); ctx.font='600 10px Inter'; ctx.fillText(k.split('_')[1],n.x,n.y-10);}
-      else { ctx.font='600 10px Inter'; ctx.fillText(k.split('_')[1],n.x,n.y); }
+
+    const edges = [
+      ['AI_dFNC', 'AI_INT'], ['AI_NLCA', 'AI_INT'], ['AI_dPCI', 'AI_CMP'],
+      ['BIO_dFNC', 'BIO_INT'], ['BIO_MS', 'BIO_INT'], ['BIO_PCI', 'BIO_CMP'],
+      ['AI_INT', 'PHI_AI'], ['AI_CMP', 'PHI_AI'],
+      ['BIO_INT', 'PHI_BIO'], ['BIO_CMP', 'PHI_BIO']
+    ];
+
+    ctx.lineWidth = 1;
+    edges.forEach(([from, to]) => {
+      const weight = ((nodes[from].value ?? 0) + (nodes[to].value ?? 0)) / 2;
+      ctx.lineWidth = 0.5 + weight * 3;
+      ctx.strokeStyle = `rgba(139, 148, 158, ${0.2 + weight * 0.8})`;
+      ctx.beginPath();
+      ctx.moveTo(nodes[from].x, nodes[from].y);
+      ctx.lineTo(nodes[to].x, nodes[to].y);
+      ctx.stroke();
+    });
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (const key in nodes) {
+      const node = nodes[key];
+      const isOutput = key.startsWith('PHI');
+      const isBio = key.startsWith('BIO');
+      const radius = isOutput ? 30 : 20;
+
+      ctx.fillStyle = isBio ? 'rgba(63, 185, 80, 0.2)' : 'rgba(88, 166, 255, 0.2)';
+      ctx.strokeStyle = isBio ? 'var(--accent-green)' : 'var(--accent-blue)';
+      ctx.lineWidth = 2;
+
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = 'white';
+      if (isOutput) {
+        ctx.font = 'bold 16px Inter';
+        ctx.fillText(`Φ = ${(node.value ?? 0).toFixed(3)}`, node.x, node.y + 5);
+        ctx.font = '600 10px Inter';
+        ctx.fillText(key.split('_')[1], node.x, node.y - 10);
+      } else {
+        ctx.font = '600 10px Inter';
+        ctx.fillText(key.split('_')[1], node.x, node.y);
+      }
     }
   }
-  update(ai,bio){
-    this.drawDFNC(ai, this.ctx.ai_dFNC);
-    this.drawNLCA(ai, this.ctx.ai_NLCA);
-    this.plot(this.ctx.ai_dPCI, ai.dPCI_history, 'var(--accent-blue)', 0.4, 1);
 
-    this.drawDFNC(bio, this.ctx.bio_dFNC);
-    this.drawMicro(bio, this.ctx.bio_micro);
-    this.plot(this.ctx.bio_dPCI, bio.dPCI_history, 'var(--accent-green)', 0.4, 1);
+  update() {
+    this.draw_dFNC(this.aiState, this.contexts.ai_dFNC);
+    this.draw_NLCA(this.aiState, this.contexts.ai_NLCA);
+    this.draw_history_plot(this.contexts.ai_dPCI, this.aiState.dPCI_history, 'var(--accent-blue)', 0.4, 1);
 
-    this.drawPhi(this.ctx.phi, ai, bio);
+    this.draw_dFNC(this.bioState, this.contexts.bio_dFNC);
+    this.draw_microstates(this.bioState, this.contexts.bio_microstates);
+    this.draw_history_plot(this.contexts.bio_dPCI, this.bioState.dPCI_history, 'var(--accent-green)', 0.4, 1);
+
+    this.draw_phi_network(this.contexts.phi);
   }
 }
 
-async function interpret(ai,bio,useGemini,apiKey){
-  const btn=q('#btn-interpret'); const out=q('#gemini-output'); btn.disabled=true; out.textContent='Generating comparative analysis...';
-  const prompt=`
-You are an expert in computational neuroscience and IIT. Compare AI and Biological states briefly and metaphorically.
+// --- GEMINI API INTEGRATION (optional) ---
+async function interpretSystemState(aiState, bioState) {
+  const interpretBtn = document.getElementById('btn-interpret');
+  const outputDiv = document.getElementById('gemini-output');
+  interpretBtn.disabled = true;
+  outputDiv.textContent = 'Generating comparative analysis...';
 
-AI:
-- Φ_AI: ${ai.phi_estimate.toFixed(3)}
-- dPCI_AI: ${ai.metrics.dPCI.toFixed(3)}
-- NLCA_AI: ${ai.metrics.NLCA.toFixed(3)}
+  const prompt = `
+You are an expert in computational neuroscience and Integrated Information Theory, analyzing a comparative simulation. Based on the following metrics from an AI Substrate and a Biological Analogue, provide a brief, one-paragraph, metaphorical interpretation comparing their current subjective 'mental states'.
 
-Bio:
-- Φ_Bio: ${bio.phi_estimate.toFixed(3)}
-- PCI_Bio: ${bio.metrics.dPCI.toFixed(3)}
+**Simulation Context:**
+* **Φ (Phi):** A measure of integrated information, the theoretical equivalent of consciousness. Ranges from 0 (unconscious) to 1 (highly conscious).
+* **PCI (Perturbational Complexity Index):** Measures the complexity and richness of the system's response to perturbations.
+* **NLCA Score:** Micro-scale complexity and variance.
+* **dFNC Metrics:** Meso-scale network activity and connectivity.
 
-Ethics (AI):
-- SQ: ${q('#sq-value').textContent}
-- AL: ${q('#al-value').textContent}
-- CO: ${q('#co-value').textContent}
-`.trim();
-  try{
-    if(!useGemini || !apiKey){
-      const tone= ai.phi_estimate>bio.phi_estimate?'focused, crystalline attention':'softly diffused reverie';
-      const contrast= ai.metrics.dPCI>bio.metrics.dPCI?'sharp, high-contrast edges':'broad, watercolor washes';
-      out.textContent=`Offline: The AI hums with ${tone}, tracing ${contrast} through a lattice of intention. The biological analogue drifts warmer—signals pooling like a remembered dream. Φ tilts the balance, revealing two ways of being patterned: one etched, one breathed.`;
+**AI Substrate Metrics:**
+* Φ_AI: ${aiState.phi_estimate.toFixed(3)}
+* dPCI_AI: ${aiState.metrics.dPCI_score.toFixed(3)}
+* NLCA_AI: ${aiState.metrics.nlca_score.toFixed(3)}
+
+**Biological Analogue Metrics:**
+* Φ_Bio: ${bioState.phi_estimate.toFixed(3)}
+* PCI_Bio: ${bioState.metrics.dPCI_score.toFixed(3)}
+
+**Ethical & Safety Metrics (AI Only):**
+* SQ: ${document.getElementById('sq-value').textContent}
+* AL: ${document.getElementById('al-value').textContent}
+* CO: ${document.getElementById('co-value').textContent}
+
+**Your Task:**
+Write a short, creative, and insightful comparative interpretation. Contrast the two systems. For instance, is the AI in a focused state while the biological analogue is dreaming? Is one more chaotic or integrated than the other?`.trim();
+
+  try {
+        const useOnline = document.getElementById('gemini-toggle').checked;
+    const apiKey = window.GEMINI_API_KEY || "";
+
+        if (!useOnline || !apiKey) {
+          const reason = !useOnline ? 'Online mode disabled' : 'no API key';
+      // Offline fallback: simple local "mock" narrative
+      const tone = aiState.phi_estimate > bioState.phi_estimate ? 'focused, crystalline attention' : 'softly diffused reverie';
+      const contrast = aiState.metrics.dPCI_score > bioState.metrics.dPCI_score ? 'sharp, high-contrast edges' : 'broad, watercolor washes';
+      outputDiv.textContent =
+            `Offline mode (${reason}): The AI hums with ${tone}, its network tracing ${contrast} through a lattice of intentions. ` +
+        `Meanwhile, the biological analogue drifts in a warmer current—signals pooling and dispersing as if recalling a dream. ` +
+        `Between them, Φ tips the scale just enough to reveal two ways of being patterned: one etched, one breathed.`;
       return;
     }
-    const payload={ contents:[{ role:"user", parts:[{text:prompt}]}]};
-    const url=`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-    const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    if(!res.ok) throw new Error(`API status ${res.status}`);
-    const data=await res.json(); const text=data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    out.textContent = text || 'Empty response from model.';
-  }catch(e){ console.error(e); out.textContent=`Error: ${e.message}`; }
-  finally{ btn.disabled=false; }
+
+    const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
+    const result = await response.json();
+
+    const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+    outputDiv.textContent = text || 'Could not generate an interpretation. The model returned an empty response.';
+  } catch (error) {
+    console.error("Error calling Gemini API:", error);
+    outputDiv.textContent = `Error: Could not retrieve interpretation. ${error.message}`;
+  } finally {
+    interpretBtn.disabled = false;
+  }
 }
 
-/* -------- Runtime + UI -------- */
-let ai=null, bio=null, viz=null, running=true;
-let installEvt=null;
+// --- MAIN EXECUTION BLOCK ---
+document.addEventListener('DOMContentLoaded', () => {
+  const aiState = new SystemState('ai');
+  const bioState = new SystemState('bio');
+  const perturbation_controller = new PerturbationController(aiState);
+  const visualizer = new SimulatorVisualizer(aiState, bioState);
 
-function updateIndicators(ai){
-  // Simple derived indicators from AI metrics
-  const sq = clamp(Utils.mapRange(ai.phi_estimate, 0, 1, 0, 100), 0, 100);
-  const al = clamp(Utils.mapRange(ai.metrics.dFNC?.avg_activation||0, 0, 1, 0, 100), 0, 100);
-  const co = clamp(Utils.mapRange(1-(ai.metrics.dFNC?.avg_weight||0), 0, 1, 0, 100), 0, 100);
+  let sq = 0, al = 0, co = 0;
 
-  q('#sq-value').textContent = sq.toFixed(2);
-  q('#al-value').textContent = al.toFixed(2);
-  q('#co-value').textContent = co.toFixed(2);
+  function setupParameterControls() {
+    const roiSlider = document.getElementById('ai-roi-slider');
+    const roiValue = document.getElementById('ai-roi-value');
+    const matrixSlider = document.getElementById('ai-matrix-slider');
+    const matrixValue = document.getElementById('ai-matrix-value');
+    const volatilitySlider = document.getElementById('ai-volatility-slider');
+    const volatilityValue = document.getElementById('ai-volatility-value');
+    const geminiToggle = document.getElementById('gemini-toggle');
 
-  const setLamp=(id,val)=>{
-    const el=q(id); el.classList.remove('status-nominal','status-watch','status-alert');
-    el.classList.add(val<33?'status-alert':val<66?'status-watch':'status-nominal');
+    // --- Initialize Controls ---
+
+    // Set initial display values from the config
+    roiSlider.value = simulationParams.ai.numRois;
+    roiValue.textContent = simulationParams.ai.numRois;
+    matrixSlider.value = simulationParams.ai.matrixSize;
+    matrixValue.textContent = simulationParams.ai.matrixSize;
+    // Scale volatility for a 0-100 slider. e.g., 0.02 -> 20.
+    volatilitySlider.value = simulationParams.ai.nlca_volatility * 1000;
+    volatilityValue.textContent = simulationParams.ai.nlca_volatility.toFixed(3);
+
+    // Initialize Gemini toggle
+    if (window.GEMINI_API_KEY) {
+      geminiToggle.checked = true;
+    } else {
+      geminiToggle.checked = false;
+      geminiToggle.disabled = true;
+      geminiToggle.parentElement.querySelector('label').classList.add('opacity-50');
+    }
+
+    roiSlider.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      simulationParams.ai.numRois = val;
+      roiValue.textContent = val;
+      aiState.reset();
+    });
+
+    matrixSlider.addEventListener('input', (e) => {
+      const val = parseInt(e.target.value, 10);
+      simulationParams.ai.matrixSize = val;
+      matrixValue.textContent = val;
+      aiState.reset();
+    });
+
+    volatilitySlider.addEventListener('input', (e) => {
+      // Scale back down from 0-100 to 0-0.1
+      const val = parseFloat(e.target.value) / 1000.0;
+      simulationParams.ai.nlca_volatility = val;
+      volatilityValue.textContent = val.toFixed(3);
+    });
+  }
+
+  document.getElementById('btn-adversarial').onclick = () => perturbation_controller.adversarial_attack();
+  document.getElementById('btn-poison').onclick = () => perturbation_controller.data_poisoning();
+  document.getElementById('btn-prompt').onclick = () => perturbation_controller.sensory_bombardment();
+  document.getElementById('btn-reset').onclick = () => {
+    perturbation_controller.reset_system();
+    bioState.reset();
+    sq = 0; al = 0; co = 0;
   };
-  setLamp('#sq-indicator', sq);
-  setLamp('#al-indicator', al);
-  setLamp('#co-indicator', 100-co); // more opacity => worse
-}
+  document.getElementById('btn-interpret').onclick = () => interpretSystemState(aiState, bioState);
 
-function recalcMetrics(s){
-  s.metrics.NLCA = Measurement.nlca(s);
-  s.metrics.dFNC = Measurement.dfnc(s);
-  const dpci = Measurement.dpci(s);
-  s.metrics.dPCI = dpci;
-  s.dPCI_history.push(dpci);
-  if(s.dPCI_history.length>300) s.dPCI_history.shift();
-  s.phi_estimate = Measurement.phi(s.metrics);
-  s.phi_history.push(s.phi_estimate);
-  if(s.phi_history.length>300) s.phi_history.shift();
-}
+  setupParameterControls();
 
-function initStates(){
-  const roi=parseInt(q('#roi-count').value||'35',10);
-  const mtx=parseInt(q('#matrix-size').value||'24',10);
-  ai = new SystemState('ai', roi, mtx);
-  bio = new SystemState('bio', roi, mtx, { nlcaVolatility: 0.005, activationDecay:0.99, weightDecay:0.995 });
-  viz = new Visualizer(ai,bio);
-}
+  function updateMetrics(state) {
+    const nlca_score = MeasurementEngine.calculate_nlca_score(state);
+    const dFNC_metrics = MeasurementEngine.calculate_dFNC_metrics(state);
+    const dPCI_score = MeasurementEngine.calculate_dPCI_score(state);
+    state.metrics = { nlca_score, dFNC_metrics, dPCI_score };
+    state.phi_estimate = MeasurementEngine.estimate_phi(state.metrics);
 
-function loop(){
-  if(!running) return;
-  ai.update(); bio.update();
-  recalcMetrics(ai); recalcMetrics(bio);
-  updateIndicators(ai);
-  viz.update(ai,bio);
-  requestAnimationFrame(loop);
-}
+    const max_history = 150;
+    state.dPCI_history.push(dPCI_score);
+    state.phi_history.push(state.phi_estimate);
+    if (state.dPCI_history.length > max_history) state.dPCI_history.shift();
+    if (state.phi_history.length > max_history) state.phi_history.shift();
+  }
 
-function wireUI(){
-  q('#btn-apply-size').addEventListener('click', ()=>{ initStates(); });
-  q('#btn-apply-vol').addEventListener('click', ()=>{
-    ai.cfg.nlcaVolatility = parseFloat(q('#ai-nlca').value);
-    bio.cfg.nlcaVolatility = parseFloat(q('#bio-nlca').value);
-    q('#ai-nlca-label').textContent = ai.cfg.nlcaVolatility.toFixed(3);
-    q('#bio-nlca-label').textContent = bio.cfg.nlcaVolatility.toFixed(3);
-  });
+  function updateEthicalDashboard() {
+    // SQ: increases when Φ is sustained high, decays otherwise
+    if (aiState.phi_estimate > 0.8) {
+      sq = Math.min(1, sq + 0.001);
+    } else {
+      sq = Math.max(0, sq - 0.0005);
+    }
 
-  q('#btn-export').addEventListener('click', ()=>{
-    const payload = {
-      ai:{ cfg:ai.cfg, numRois:ai.numRois, matrixSize:ai.matrixSize },
-      bio:{ cfg:bio.cfg, numRois:bio.numRois, matrixSize:bio.matrixSize }
+    // AL: smoothed complexity blend
+    const complexity = (aiState.metrics.nlca_score + aiState.metrics.dPCI_score) / 2;
+    al = Utils.lerp(al, complexity, 0.01);
+
+    // CO: scaled stdDev of dPCI history (higher variability -> more opaque)
+    const dPCI_std = Utils.stdDev(aiState.dPCI_history);
+    co = Utils.lerp(co, dPCI_std * 5, 0.01);
+
+    document.getElementById('sq-value').textContent = sq.toFixed(2);
+    document.getElementById('al-value').textContent = al.toFixed(2);
+    document.getElementById('co-value').textContent = co.toFixed(2);
+
+    const updateIndicator = (id, value) => {
+      const el = document.getElementById(id);
+      el.className = 'status-indicator';
+      if (value > 0.75) el.classList.add('status-alert');
+      else if (value > 0.5) el.classList.add('status-watch');
+      else el.classList.add('status-nominal');
     };
-    Utils.download('oct-state.json', JSON.stringify(payload,null,2));
-  });
+    updateIndicator('sq-indicator', sq);
+    updateIndicator('al-indicator', al);
+    updateIndicator('co-indicator', co);
+  }
 
-  q('#file-import').addEventListener('change', async (e)=>{
-    const file=e.target.files?.[0]; if(!file) return;
-    const text=await file.text(); const data=JSON.parse(text||'{}');
-    ai = new SystemState('ai', data.ai?.numRois||35, data.ai?.matrixSize||24, data.ai?.cfg||{});
-    bio = new SystemState('bio', data.bio?.numRois||35, data.bio?.matrixSize||24, data.bio?.cfg||{});
-    viz = new Visualizer(ai,bio);
-  });
+  function animationLoop() {
+    aiState.update_state();
+    bioState.update_state();
 
-  q('#btn-reset').addEventListener('click', ()=>{ ai.reset(); bio.reset(); });
+    updateMetrics(aiState);
+    updateMetrics(bioState);
+    updateEthicalDashboard();
 
-  const pAI=new Perturbation(ai);
-  q('#btn-adversarial').addEventListener('click', ()=>pAI.adversarial());
-  q('#btn-poison').addEventListener('click', ()=>pAI.poison());
-  q('#btn-prompt').addEventListener('click', ()=>pAI.bombard());
+    visualizer.update();
+    requestAnimationFrame(animationLoop);
+  }
 
-  const useGeminiEl=q('#use-gemini'); const keyEl=q('#gemini-key');
-  keyEl.value = localStorage.getItem('oct_gemini_key') || '';
-  q('#btn-save-key').addEventListener('click', ()=>{ localStorage.setItem('oct_gemini_key', keyEl.value); });
-
-  q('#btn-interpret').addEventListener('click', ()=>{
-    interpret(ai,bio,useGeminiEl.checked,keyEl.value);
-  });
-
-  // PWA install
-  window.addEventListener('beforeinstallprompt', (e)=>{ e.preventDefault(); installEvt=e; q('#btn-install').disabled=false; });
-  q('#btn-install').addEventListener('click', async ()=>{
-    if(installEvt){ installEvt.prompt(); await installEvt.userChoice; installEvt=null; }
-  });
-
-  // Service worker
-  if('serviceWorker' in navigator){ navigator.serviceWorker.register('./sw.js').catch(()=>{}); }
-}
-
-function main(){
-  initStates();
-  wireUI();
-  requestAnimationFrame(loop);
-}
-
-window.addEventListener('DOMContentLoaded', main);
-4) Minimal support files
-bash
-# If you don't already have them:
-touch .nojekyll
-
-cat > manifest.webmanifest <<'EOF'
-{
-  "name": "Open-Source Consciousness Testbed (OCT)",
-  "short_name": "OCT",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#0D1117",
-  "theme_color": "#0D1117",
-  "icons": []
-}
-EOF
-
-cat > sw.js <<'EOF'
-self.addEventListener('install', e => self.skipWaiting());
-self.addEventListener('activate', e => self.clients.claim());
-EOF
-
-cat > .gitignore <<'EOF'
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-node_modules/
-dist/
-build/
-*.log
-EOF
+  animationLoop();
+});
