@@ -465,7 +465,7 @@ class SimulatorVisualizer {
   }
 }
 
-// --- GEMINI API INTEGRATION (optional) ---
+// --- LLM API INTEGRATION (optional) ---
 async function interpretSystemState(aiState, bioState) {
   const interpretBtn = document.getElementById('btn-interpret');
   const outputDiv = document.getElementById('gemini-output');
@@ -499,11 +499,14 @@ You are an expert in computational neuroscience and Integrated Information Theor
 Write a short, creative, and insightful comparative interpretation. Contrast the two systems. For instance, is the AI in a focused state while the biological analogue is dreaming? Is one more chaotic or integrated than the other?`.trim();
 
   try {
-        const useOnline = document.getElementById('gemini-toggle').checked;
-    const apiKey = window.GEMINI_API_KEY || "";
+    const useOnline = document.getElementById('gemini-toggle').checked;
+    const providerSelect = document.getElementById('provider-select');
+    const providerName = providerSelect.value;
+    const provider = llm_providers[providerName];
+    const apiKey = localStorage.getItem(`${providerName}_api_key`);
 
-        if (!useOnline || !apiKey) {
-          const reason = !useOnline ? 'Online mode disabled' : 'no API key';
+    if (!useOnline || !provider || !apiKey) {
+      const reason = !useOnline ? 'Online mode disabled' : 'no API key for ' + providerName;
       // Offline fallback: simple local "mock" narrative
       const tone = aiState.phi_estimate > bioState.phi_estimate ? 'focused, crystalline attention' : 'softly diffused reverie';
       const contrast = aiState.metrics.dPCI_score > bioState.metrics.dPCI_score ? 'sharp, high-contrast edges' : 'broad, watercolor washes';
@@ -514,22 +517,11 @@ Write a short, creative, and insightful comparative interpretation. Contrast the
       return;
     }
 
-    const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+    const interpretation = await provider.interpret(prompt, apiKey);
+    outputDiv.textContent = interpretation;
 
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
-    const result = await response.json();
-
-    const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-    outputDiv.textContent = text || 'Could not generate an interpretation. The model returned an empty response.';
   } catch (error) {
-    console.error("Error calling Gemini API:", error);
+    console.error(`Error calling ${"Gemini"} API:`, error);
     outputDiv.textContent = `Error: Could not retrieve interpretation. ${error.message}`;
   } finally {
     interpretBtn.disabled = false;
@@ -553,6 +545,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const volatilitySlider = document.getElementById('ai-volatility-slider');
     const volatilityValue = document.getElementById('ai-volatility-value');
     const geminiToggle = document.getElementById('gemini-toggle');
+    const providerSelect = document.getElementById('provider-select');
+    const apiKeyInput = document.getElementById('api-key-input');
+    const saveKeyBtn = document.getElementById('save-key-btn');
 
     // --- Initialize Controls ---
 
@@ -561,18 +556,47 @@ document.addEventListener('DOMContentLoaded', () => {
     roiValue.textContent = simulationParams.ai.numRois;
     matrixSlider.value = simulationParams.ai.matrixSize;
     matrixValue.textContent = simulationParams.ai.matrixSize;
-    // Scale volatility for a 0-100 slider. e.g., 0.02 -> 20.
     volatilitySlider.value = simulationParams.ai.nlca_volatility * 1000;
     volatilityValue.textContent = simulationParams.ai.nlca_volatility.toFixed(3);
 
-    // Initialize Gemini toggle
-    if (window.GEMINI_API_KEY) {
-      geminiToggle.checked = true;
-    } else {
-      geminiToggle.checked = false;
-      geminiToggle.disabled = true;
-      geminiToggle.parentElement.querySelector('label').classList.add('opacity-50');
+    // Populate provider dropdown
+    for (const providerName in llm_providers) {
+      const option = document.createElement('option');
+      option.value = providerName;
+      option.textContent = providerName;
+      providerSelect.appendChild(option);
     }
+
+    // Function to update UI based on selected provider
+    const updateProviderUI = () => {
+      const selectedProvider = providerSelect.value;
+      const apiKey = localStorage.getItem(`${selectedProvider}_api_key`);
+      apiKeyInput.value = apiKey || '';
+
+      const hasKey = !!apiKey;
+      geminiToggle.disabled = !hasKey;
+      geminiToggle.checked = hasKey;
+      geminiToggle.parentElement.querySelector('label').classList.toggle('opacity-50', !hasKey);
+    };
+
+    // Initial UI setup
+    updateProviderUI();
+
+    // Event Listeners
+    providerSelect.addEventListener('change', updateProviderUI);
+
+    saveKeyBtn.addEventListener('click', () => {
+      const selectedProvider = providerSelect.value;
+      const apiKey = apiKeyInput.value.trim();
+      if (apiKey) {
+        localStorage.setItem(`${selectedProvider}_api_key`, apiKey);
+        alert(`${selectedProvider} API Key saved!`);
+      } else {
+        localStorage.removeItem(`${selectedProvider}_api_key`);
+        alert(`${selectedProvider} API Key removed.`);
+      }
+      updateProviderUI();
+    });
 
     roiSlider.addEventListener('input', (e) => {
       const val = parseInt(e.target.value, 10);
@@ -589,7 +613,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     volatilitySlider.addEventListener('input', (e) => {
-      // Scale back down from 0-100 to 0-0.1
       const val = parseFloat(e.target.value) / 1000.0;
       simulationParams.ai.nlca_volatility = val;
       volatilityValue.textContent = val.toFixed(3);
