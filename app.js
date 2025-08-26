@@ -468,71 +468,38 @@ class SimulatorVisualizer {
 // --- LLM API INTEGRATION (optional) ---
 async function interpretSystemState(aiState, bioState) {
   const interpretBtn = document.getElementById('btn-interpret');
-  const outputDiv = document.getElementById('llm-output');
+  const outputDiv = document.getElementById('gemini-output');
   interpretBtn.disabled = true;
-  outputDiv.textContent = 'Gathering simulation data and generating analysis...';
-
-  // Helper function to create a summary of the state
-  const summarizeState = (state) => {
-    // Sub-sample the NLCA matrix to keep the prompt size reasonable
-    const matrix_sample = state.nlca_matrix.slice(0, 5).map(row => row.slice(0, 5));
-
-    return {
-      metrics: {
-        phi_estimate: state.phi_estimate.toFixed(4),
-        dPCI_score: state.metrics.dPCI_score.toFixed(4),
-        nlca_score: state.metrics.nlca_score.toFixed(4),
-        dFNC_avg_activation: state.metrics.dFNC_metrics.avg_activation.toFixed(4),
-        dFNC_avg_weight: state.metrics.dFNC_metrics.avg_weight.toFixed(4),
-      },
-      history: {
-        dPCI_trend: state.dPCI_history.slice(-10), // last 10 steps
-        phi_trend: state.phi_history.slice(-10),   // last 10 steps
-      },
-      parameters: {
-        numRois: state.numRois,
-        matrixSize: state.matrixSize,
-      },
-      nlca_matrix_sample: matrix_sample
-    };
-  };
-
-  const simulationData = {
-    ai_substrate: summarizeState(aiState),
-    biological_analogue: summarizeState(bioState),
-    ethical_dashboard: {
-      sentience_quotient: document.getElementById('sq-value').textContent,
-      autonomy_level: document.getElementById('al-value').textContent,
-      causal_opacity: document.getElementById('co-value').textContent,
-    }
-  };
+  outputDiv.textContent = 'Generating comparative analysis...';
 
   const prompt = `
-You are a senior computational neuroscientist tasked with analyzing data from a complex simulation comparing an AI substrate with a biological analogue. You will receive a JSON object containing detailed metrics, historical trends, and raw data samples.
+You are an expert in computational neuroscience and Integrated Information Theory, analyzing a comparative simulation. Based on the following metrics from an AI Substrate and a Biological Analogue, provide a brief, one-paragraph, metaphorical interpretation comparing their current subjective 'mental states'.
 
-Your task is to perform a rigorous scientific data analysis and generate a report in Markdown format.
+**Simulation Context:**
+* **Φ (Phi):** A measure of integrated information, the theoretical equivalent of consciousness. Ranges from 0 (unconscious) to 1 (highly conscious).
+* **PCI (Perturbational Complexity Index):** Measures the complexity and richness of the system's response to perturbations.
+* **NLCA Score:** Micro-scale complexity and variance.
+* **dFNC Metrics:** Meso-scale network activity and connectivity.
 
-**Instructions:**
+**AI Substrate Metrics:**
+* Φ_AI: ${aiState.phi_estimate.toFixed(3)}
+* dPCI_AI: ${aiState.metrics.dPCI_score.toFixed(3)}
+* NLCA_AI: ${aiState.metrics.nlca_score.toFixed(3)}
 
-1.  **Analyze the Provided Data:** Carefully examine the JSON data below. Do not hallucinate or invent data.
-2.  **Structure Your Report:** Organize your analysis into the following sections:
-    *   **## Executive Summary:** A brief, high-level overview of the findings.
-    *   **## Comparative Analysis:** A detailed comparison of the AI substrate and the biological analogue across all key metrics (Φ, dPCI, NLCA, dFNC).
-    *   **## Temporal Dynamics:** Analyze the trends in the \`dPCI_trend\` and \`phi_trend\` data. Are the systems stable, oscillating, or chaotic?
-    *   **## Micro-structure Insights (NLCA):** Comment on the included \`nlca_matrix_sample\`. What does the variance and structure of this sample imply about the system's micro-states?
-    *   **## Ethical & Safety Assessment (AI Only):** Based on the ethical dashboard metrics, provide a concise assessment of the AI's state.
-    *   **## Conclusion & Recommendations:** Conclude with your overall interpretation and suggest one or two next steps for the simulation experiment (e.g., "apply sensory bombardment to observe dPCI response").
-3.  **Perform Calculations:** Where appropriate, perform simple calculations to support your analysis (e.g., calculate the average or standard deviation of the trend data).
-4.  **Maintain a Scientific Tone:** Use precise, objective language.
+**Biological Analogue Metrics:**
+* Φ_Bio: ${bioState.phi_estimate.toFixed(3)}
+* PCI_Bio: ${bioState.metrics.dPCI_score.toFixed(3)}
 
-**Simulation Data:**
-\`\`\`json
-${JSON.stringify(simulationData, null, 2)}
-\`\`\`
-`.trim();
+**Ethical & Safety Metrics (AI Only):**
+* SQ: ${document.getElementById('sq-value').textContent}
+* AL: ${document.getElementById('al-value').textContent}
+* CO: ${document.getElementById('co-value').textContent}
+
+**Your Task:**
+Write a short, creative, and insightful comparative interpretation. Contrast the two systems. For instance, is the AI in a focused state while the biological analogue is dreaming? Is one more chaotic or integrated than the other?`.trim();
 
   try {
-    const useOnline = document.getElementById('llm-toggle').checked;
+    const useOnline = document.getElementById('gemini-toggle').checked;
     const providerSelect = document.getElementById('provider-select');
     const providerName = providerSelect.value;
     const provider = llm_providers[providerName];
@@ -577,7 +544,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const matrixValue = document.getElementById('ai-matrix-value');
     const volatilitySlider = document.getElementById('ai-volatility-slider');
     const volatilityValue = document.getElementById('ai-volatility-value');
-    const llmToggle = document.getElementById('llm-toggle');
+    const geminiToggle = document.getElementById('gemini-toggle');
     const providerSelect = document.getElementById('provider-select');
     const apiKeyInput = document.getElementById('api-key-input');
     const saveKeyBtn = document.getElementById('save-key-btn');
@@ -607,9 +574,9 @@ document.addEventListener('DOMContentLoaded', () => {
       apiKeyInput.value = apiKey || '';
 
       const hasKey = !!apiKey;
-      llmToggle.disabled = !hasKey;
-      llmToggle.checked = hasKey;
-      llmToggle.parentElement.querySelector('label').classList.toggle('opacity-50', !hasKey);
+      geminiToggle.disabled = !hasKey;
+      geminiToggle.checked = hasKey;
+      geminiToggle.parentElement.querySelector('label').classList.toggle('opacity-50', !hasKey);
     };
 
     // Initial UI setup
