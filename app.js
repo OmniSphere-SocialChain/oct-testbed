@@ -39,6 +39,7 @@ const Utils = {
 };
 
 // --- GLOBAL CONFIG ---
+let simulationHistory = [];
 const simulationParams = {
   ai: {
     numRois: 35,
@@ -187,32 +188,62 @@ const MeasurementEngine = {
 };
 
 class PerturbationController {
-  constructor(state) { this.state = state; }
-  adversarial_attack() {
-    for (let i = 0; i < this.state.matrixSize; i++) {
-      for (let j = 0; j < this.state.matrixSize; j++) {
-        this.state.nlca_matrix[i][j] += (Math.random() - 0.5) * 0.8;
-        this.state.nlca_matrix[i][j] = Math.max(0, Math.min(1, this.state.nlca_matrix[i][j]));
-      }
+    constructor(state) {
+        this.state = state;
     }
-  }
-  data_poisoning() {
-    if (this.state.dFNC_graph.edges.length === 0) return;
-    for (let i = 0; i < 10; i++) {
-      const edge = this.state.dFNC_graph.edges[Math.floor(Math.random() * this.state.dFNC_graph.edges.length)];
-      edge.weight *= 0.1;
+
+    log_event(action) {
+        // Ensure metrics are calculated before logging
+        updateMetrics(this.state);
+        const metrics_snapshot = {
+            phi_estimate: this.state.phi_estimate.toFixed(4),
+            dPCI_score: this.state.metrics.dPCI_score.toFixed(4),
+            nlca_score: this.state.metrics.nlca_score.toFixed(4),
+            dFNC_avg_activation: this.state.metrics.dFNC_metrics.avg_activation.toFixed(4),
+            dFNC_avg_weight: this.state.metrics.dFNC_metrics.avg_weight.toFixed(4),
+        };
+        simulationHistory.push({
+            action: action,
+            time: this.state.time,
+            metrics_before: metrics_snapshot
+        });
+         console.log(`Event logged: ${action} at time ${this.state.time}`);
     }
-  }
-  sensory_bombardment() {
-    if (this.state.dFNC_graph.nodes.length === 0) return;
-    for (let i = 0; i < 5; i++) {
-      const targetNode = this.state.dFNC_graph.nodes[Math.floor(Math.random() * this.state.dFNC_graph.nodes.length)];
-      targetNode.activation = 1.0;
+
+    adversarial_attack() {
+        this.log_event('Adversarial Attack');
+        for (let i = 0; i < this.state.matrixSize; i++) {
+            for (let j = 0; j < this.state.matrixSize; j++) {
+                this.state.nlca_matrix[i][j] += (Math.random() - 0.5) * 0.8;
+                this.state.nlca_matrix[i][j] = Math.max(0, Math.min(1, this.state.nlca_matrix[i][j]));
+            }
+        }
     }
-  }
-  reset_system() {
-    this.state.reset();
-  }
+
+    data_poisoning() {
+        this.log_event('Data Poisoning');
+        if (this.state.dFNC_graph.edges.length === 0) return;
+        for (let i = 0; i < 10; i++) {
+            const edge = this.state.dFNC_graph.edges[Math.floor(Math.random() * this.state.dFNC_graph.edges.length)];
+            edge.weight *= 0.1;
+        }
+    }
+
+    sensory_bombardment() {
+        this.log_event('Sensory Bombardment');
+        if (this.state.dFNC_graph.nodes.length === 0) return;
+        for (let i = 0; i < 5; i++) {
+            const targetNode = this.state.dFNC_graph.nodes[Math.floor(Math.random() * this.state.dFNC_graph.nodes.length)];
+            targetNode.activation = 1.0;
+        }
+    }
+
+    reset_system() {
+        this.log_event('System Reset'); // Logs the state *before* reset
+        this.state.reset(); // Resets the state
+        simulationHistory = []; // Clears the history log
+        this.log_event('Initial State'); // Logs the new, clean state
+    }
 }
 
 // --- VISUALIZATION LAYER ---
@@ -455,11 +486,11 @@ class SimulatorVisualizer {
   update() {
     this.draw_dFNC(this.aiState, this.contexts.ai_dFNC);
     this.draw_NLCA(this.aiState, this.contexts.ai_NLCA);
-    this.draw_history_plot(this.contexts.ai_dPCI, this.aiState.dPCI_history, 'var(--accent-blue)', 0.4, 1);
+    this.draw_history_plot(this.contexts.ai_dPCI, this.aiState.dPCI_history, 'var(--accent-blue)', 0.0, 1);
 
     this.draw_dFNC(this.bioState, this.contexts.bio_dFNC);
     this.draw_microstates(this.bioState, this.contexts.bio_microstates);
-    this.draw_history_plot(this.contexts.bio_dPCI, this.bioState.dPCI_history, 'var(--accent-green)', 0.4, 1);
+    this.draw_history_plot(this.contexts.bio_dPCI, this.bioState.dPCI_history, 'var(--accent-green)', 0.0, 1);
 
     this.draw_phi_network(this.contexts.phi);
   }
@@ -500,6 +531,7 @@ async function interpretSystemState(aiState, bioState) {
   const simulationData = {
     ai_substrate: summarizeState(aiState),
     biological_analogue: summarizeState(bioState),
+    simulation_history: simulationHistory,
     ethical_dashboard: {
       sentience_quotient: document.getElementById('sq-value').textContent,
       autonomy_level: document.getElementById('al-value').textContent,
@@ -508,22 +540,21 @@ async function interpretSystemState(aiState, bioState) {
   };
 
   const prompt = `
-You are a senior computational neuroscientist tasked with analyzing data from a complex simulation comparing an AI substrate with a biological analogue. You will receive a JSON object containing detailed metrics, historical trends, and raw data samples.
+You are a senior computational neuroscientist tasked with analyzing data from a complex simulation comparing an AI substrate with a biological analogue. You will receive a JSON object containing detailed metrics, historical trends, and a history of interventions applied to the AI.
 
 Your task is to perform a rigorous scientific data analysis and generate a report in Markdown format.
 
 **Instructions:**
 
-1.  **Analyze the Provided Data:** Carefully examine the JSON data below. Do not hallucinate or invent data.
+1.  **Analyze the Provided Data:** Carefully examine the JSON data below. Pay special attention to the \`simulation_history\` array, which records the sequence of manual interventions applied to the AI substrate. This history is crucial for understanding the data. Do not hallucinate or invent data.
 2.  **Structure Your Report:** Organize your analysis into the following sections:
-    *   **## Executive Summary:** A brief, high-level overview of the findings.
+    *   **## Executive Summary:** A brief, high-level overview of the findings, including the impact of any interventions.
     *   **## Comparative Analysis:** A detailed comparison of the AI substrate and the biological analogue across all key metrics (Φ, dPCI, NLCA, dFNC).
-    *   **## Temporal Dynamics:** Analyze the trends in the \`dPCI_trend\` and \`phi_trend\` data. Are the systems stable, oscillating, or chaotic?
-    *   **## Micro-structure Insights (NLCA):** Comment on the included \`nlca_matrix_sample\`. What does the variance and structure of this sample imply about the system's micro-states?
-    *   **## Ethical & Safety Assessment (AI Only):** Based on the ethical dashboard metrics, provide a concise assessment of the AI's state.
-    *   **## Conclusion & Recommendations:** Conclude with your overall interpretation and suggest one or two next steps for the simulation experiment (e.g., "apply sensory bombardment to observe dPCI response").
-3.  **Perform Calculations:** Where appropriate, perform simple calculations to support your analysis (e.g., calculate the average or standard deviation of the trend data).
-4.  **Maintain a Scientific Tone:** Use precise, objective language.
+    *   **## Temporal Dynamics & Interventions:** Analyze the trends in the \`dPCI_trend\` and \`phi_trend\` data. **Crucially, correlate any sharp changes or deviations in the AI's metrics with the events logged in the \`simulation_history\`.** Describe how the system reacted to each specific intervention (e.g., "At t=150, an 'Adversarial Attack' was logged. Immediately following this, the AI's dPCI score dropped by 25%...").
+    *   **## Micro-structure Insights (NLCA):** Comment on the included \`nlca_matrix_sample\`. Does its structure change after specific interventions?
+    *   **## Ethical & Safety Assessment (AI Only):** Based on the ethical dashboard metrics, provide a concise assessment of the AI's state, considering how interventions may have affected it.
+    *   **## Conclusion & Recommendations:** Conclude with your overall interpretation. Suggest one or two next steps for the simulation experiment based on the observed effects of the interventions (e.g., "The system showed high resilience to data poisoning; a stronger adversarial attack is recommended to test its limits.").
+3.  **Maintain a Scientific Tone:** Use precise, objective language.
 
 **Simulation Data:**
 \`\`\`json
@@ -553,6 +584,12 @@ ${JSON.stringify(simulationData, null, 2)}
     const interpretation = await provider.interpret(prompt, apiKey);
     outputDiv.textContent = interpretation;
 
+    // After successful interpretation, reset the history for the next run.
+    // The current state becomes the new "initial state" for the next sequence of events.
+    simulationHistory = [];
+    perturbation_controller.log_event('New Baseline State (Post-Analysis)');
+
+
   } catch (error) {
     console.error(`Error calling ${"Gemini"} API:`, error);
     outputDiv.textContent = `Error: Could not retrieve interpretation. ${error.message}`;
@@ -567,6 +604,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const bioState = new SystemState('bio');
   const perturbation_controller = new PerturbationController(aiState);
   const visualizer = new SimulatorVisualizer(aiState, bioState);
+
+  // Log the initial state of the simulation upon loading
+  perturbation_controller.log_event('Initial State');
 
   let sq = 0, al = 0, co = 0;
 
