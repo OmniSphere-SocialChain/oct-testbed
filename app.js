@@ -499,7 +499,7 @@ class SimulatorVisualizer {
 // --- LLM API INTEGRATION (optional) ---
 async function interpretSystemState(aiState, bioState) {
   const interpretBtn = document.getElementById('btn-interpret');
-  const outputDiv = document.getElementById('llm-output');
+  const outputDiv = document.getElementById('gemini-output');
   interpretBtn.disabled = true;
   outputDiv.textContent = 'Gathering simulation data and generating analysis...';
 
@@ -563,7 +563,7 @@ ${JSON.stringify(simulationData, null, 2)}
 `.trim();
 
   try {
-    const useOnline = document.getElementById('llm-toggle').checked;
+    const useOnline = document.getElementById('gemini-toggle').checked;
     const providerSelect = document.getElementById('provider-select');
     const providerName = providerSelect.value;
     const provider = llm_providers[providerName];
@@ -617,7 +617,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const matrixValue = document.getElementById('ai-matrix-value');
     const volatilitySlider = document.getElementById('ai-volatility-slider');
     const volatilityValue = document.getElementById('ai-volatility-value');
-    const llmToggle = document.getElementById('llm-toggle');
+    const geminiToggle = document.getElementById('gemini-toggle');
     const providerSelect = document.getElementById('provider-select');
     const apiKeyInput = document.getElementById('api-key-input');
     const saveKeyBtn = document.getElementById('save-key-btn');
@@ -647,9 +647,9 @@ document.addEventListener('DOMContentLoaded', () => {
       apiKeyInput.value = apiKey || '';
 
       const hasKey = !!apiKey;
-      llmToggle.disabled = !hasKey;
-      llmToggle.checked = hasKey;
-      llmToggle.parentElement.querySelector('label').classList.toggle('opacity-50', !hasKey);
+      geminiToggle.disabled = !hasKey;
+      geminiToggle.checked = hasKey;
+      geminiToggle.parentElement.querySelector('label').classList.toggle('opacity-50', !hasKey);
     };
 
     // Initial UI setup
