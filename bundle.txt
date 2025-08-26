@@ -1,0 +1,108 @@
+<!DOCTYPE html>  
+<html lang="en">  
+<head>  
+  <meta charset="utf-8"/>  
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>  
+  <title>Open-Source Consciousness Testbed (OCT)</title>  
+  <meta name="theme-color" content="#0D1117"/>  
+  <link rel="manifest" href="./manifest.webmanifest"/>  
+  <script src="https://cdn.tailwindcss.com"></script>  
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet"/>  
+  <style>  
+    :root {  
+      --bg-primary:#0D1117; --bg-secondary:#161B22; --border-color:#30363D;  
+      --text-primary:#C9D1D9; --text-secondary:#8B949E;  
+      --accent-blue:#58A6FF; --accent-green:#3FB950; --accent-red:#F85149; --accent-purple:#BC8CFF;  
+    }  
+    body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background:var(--bg-primary); color:var(--text-primary); }  
+    .canvas-container { background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:.75rem; overflow:hidden; padding:1rem; display:flex; flex-direction:column; }  
+    .panel-title { text-align:center; font-weight:600; color:var(--text-primary); margin-bottom:.75rem; font-size:1.1rem; }  
+    .status-indicator { width:1rem; height:1rem; border-radius:50%; margin-right:.5rem; flex-shrink:0; }  
+    .status-nominal { background-color: var(--accent-green); }  
+    .status-watch { background-color: #D29922; }  
+    .status-alert { background-color: var(--accent-red); }  
+    .gemini-output { background:rgba(0,0,0,.2); border:1px solid var(--border-color); border-radius:.5rem; padding:1rem; color:var(--text-secondary); min-height:6rem; }  
+    canvas { display:block; width:100%; height:100%; image-rendering:pixelated; }  
+  </style>  
+</head>  
+<body class="antialiased">  
+  <div class="min-h-screen flex flex-col p-4 md:p-6 lg:p-8">  
+    <header class="mb-4">  
+      <div class="flex items-center justify-between flex-wrap gap-3">  
+        <div>  
+          <h1 class="text-2xl md:text-3xl font-bold text-white">Open-Source Consciousness Testbed (OCT)</h1>  
+          <p class="text-sm text-gray-400">Standalone runner, PWA-enabled, widget-ready</p>  
+        </div>  
+        <div class="flex items-center gap-2">  
+          <button id="btn-install" class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded text-white">Install App</button>  
+          <a id="repo-link" href="https://github.com/your-user/oct-testbed" target="_blank" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-white">Repo</a>  
+        </div>  
+      </div>  
+
+      <div class="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">  
+        <div class="bg-gray-900/50 border border-gray-700 rounded p-3">  
+          <h3 class="font-semibold mb-2">Model Size</h3>  
+          <div class="grid grid-cols-2 gap-2 text-sm">  
+            <label class="flex flex-col">ROI Count  
+              <input id="roi-count" type="number" min="2" max="256" value="35" class="mt-1 bg-gray-800 border border-gray-700 rounded px-2 py-1"/>  
+            </label>  
+            <label class="flex flex-col">Matrix Size  
+              <input id="matrix-size" type="number" min="4" max="256" value="24" class="mt-1 bg-gray-800 border border-gray-700 rounded px-2 py-1"/>  
+            </label>  
+          </div>  
+          <button id="btn-apply-size" class="mt-2 w-full bg-blue-700 hover:bg-blue-600 rounded px-3 py-1.5">Apply Size</button>  
+        </div>  
+
+        <div class="bg-gray-900/50 border border-gray-700 rounded p-3">  
+          <h3 class="font-semibold mb-2">Volatility</h3>  
+          <div class="text-sm">  
+            <label class="block mb-2">AI NLCA Volatility <span id="ai-nlca-label" class="text-xs text-gray-400">0.02</span>  
+              <input id="ai-nlca" type="range" min="0" max="0.08" step="0.005" value="0.02" class="w-full">  
+            </label>  
+            <label class="block">Bio NLCA Volatility <span id="bio-nlca-label" class="text-xs text-gray-400">0.005</span>  
+              <input id="bio-nlca" type="range" min="0" max="0.04" step="0.0025" value="0.005" class="w-full">  
+            </label>  
+          </div>  
+          <button id="btn-apply-vol" class="mt-2 w-full bg-blue-700 hover:bg-blue-600 rounded px-3 py-1.5">Apply Volatility</button>  
+        </div>  
+
+        <div class="bg-gray-900/50 border border-gray-700 rounded p-3">  
+          <h3 class="font-semibold mb-2">State I/O</h3>  
+          <div class="grid grid-cols-2 gap-2">  
+            <button id="btn-export" class="bg-gray-700 hover:bg-gray-600 rounded px-3 py-1.5">Export</button>  
+            <label class="bg-gray-700 hover:bg-gray-600 rounded px-3 py-1.5 text-center cursor-pointer">Import  
+              <input id="file-import" type="file" accept="application/json" class="hidden"/>  
+            </label>  
+          </div>  
+          <button id="btn-reset" class="mt-2 w-full bg-gray-600 hover:bg-gray-500 rounded px-3 py-1.5">Reset System</button>  
+        </div>  
+
+        <div class="bg-gray-900/50 border border-gray-700 rounded p-3">  
+          <h3 class="font-semibold mb-2">Gemini Mode</h3>  
+          <div class="flex items-center justify-between text-sm mb-2">  
+            <span>Use Gemini API</span>  
+            <label class="inline-flex items-center cursor-pointer">  
+              <input id="use-gemini" type="checkbox" class="sr-only peer">  
+              <div class="w-10 h-5 bg-gray-600 peer-checked:bg-emerald-600 rounded-full relative after:absolute after:top-0.5 after:left-0.5 after:w-4 after:h-4 after:bg-white after:rounded-full after:transition-all peer-checked:after:translate-x-5"></div>  
+            </label>  
+          </div>  
+          <label class="block text-sm">API Key  
+            <input id="gemini-key" type="password" placeholder="sk-..." class="mt-1 w-full bg-gray-800 border border-gray-700 rounded px-2 py-1"/>  
+          </label>  
+          <button id="btn-save-key" class="mt-2 w-full bg-emerald-700 hover:bg-emerald-600 rounded px-3 py-1.5">Save Key</button>  
+        </div>  
+      </div>  
+    </header>  
+
+    <main class="flex-grow grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">  
+      <div class="flex flex-col gap-4 lg:gap-6">  
+        <div class="text-center bg-blue-900/50 border border-blue-500/50 rounded-lg py-2">  
+          <h2 class="text-xl font-bold" style="color: var(--accent-blue)">AI Substrate (LLM Simulation)</h2>  
+        </div>  
+        <div class="canvas-container flex-grow">  
+          <h3 class="panel-title">AI: Dynamic Functional Connectivity (dFNC)</h3>  
+          <div class="flex-grow relative"><canvas id="ai-dFNC-canvas"></canvas></div>  
+        </div>  
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 lg:gap-6">  
+          <div class="canvas-container" style="aspect-ratio:
+
