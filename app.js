@@ -586,10 +586,6 @@ ${JSON.stringify(simulationData, null, 2)}
 
     // After successful interpretation, reset the history for the next run.
     // The current state becomes the new "initial state" for the next sequence of events.
-    simulationHistory = [];
-    perturbation_controller.log_event('New Baseline State (Post-Analysis)');
-
-
   } catch (error) {
     console.error(`Error calling ${"Gemini"} API:`, error);
     outputDiv.textContent = `Error: Could not retrieve interpretation. ${error.message}`;
